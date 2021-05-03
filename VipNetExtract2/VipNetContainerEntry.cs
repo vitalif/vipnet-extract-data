@@ -6,6 +6,7 @@ using System.Text;
 using Org.BouncyCastle.Asn1;
 using Org.BouncyCastle.Asn1.CryptoPro;
 using Org.BouncyCastle.Asn1.X509;
+using Org.BouncyCastle.Asn1.Pkcs;
 using Org.BouncyCastle.Crypto;
 using Org.BouncyCastle.Crypto.Digests;
 using Org.BouncyCastle.Crypto.Engines;
@@ -83,10 +84,67 @@ namespace VipNetExtract
             return new BigInteger(1, privateKey);
         }
 
+        private byte[] PBKDF2(IMac hmac, byte[] password, byte[] salt, int iterations, int keyLength)
+        {
+            // HMAC(HASH, key, msg) = HASH((key ^ 0x5c...) + HASH((key ^ 0x36...) + msg))
+            // U(HASH, key, salt, blockNum_be_int32, 1) = HMAC(HASH, key, salt + blockNum_be_int32)
+            // U(..., N) = HMAC(HASH, key, U(..., N-1))
+            // F(..., N) = U(..., 1) ^ ... ^ U(..., N)
+            // PBKDF2(HASH, password, salt, N, keyLength, blockSize) =
+            //     (F(HASH, password, salt, 1, N) + ... +
+            //     F(HASH, password, salt, ceil(keyLength / blockSize), N)).resize(keyLength)
+            int blockSize = hmac.GetMacSize();
+            hmac.Init(new KeyParameter(password));
+            int numBlocks = (keyLength+blockSize-1)/blockSize;
+            var output = new byte[numBlocks*blockSize];
+            var blockNumBuf = new byte[4];
+            for (int blockNum = 1; blockNum <= numBlocks; blockNum++)
+            {
+                blockNumBuf[0] = (byte)(blockNum >> 24);
+                blockNumBuf[1] = (byte)(blockNum >> 16);
+                blockNumBuf[2] = (byte)(blockNum >> 8);
+                blockNumBuf[3] = (byte)(blockNum);
+                byte[] block = new byte[blockSize];
+                byte[] F = new byte[blockSize];
+                hmac.BlockUpdate(salt, 0, salt.Length);
+                hmac.BlockUpdate(blockNumBuf, 0, 4);
+                hmac.DoFinal(F, 0);
+                hmac.Reset();
+                for (int j = 0; j < F.Length; j++)
+                    block[j] = F[j];
+                for (int iter = 1; iter < iterations; iter++)
+                {
+                    hmac.BlockUpdate(F, 0, F.Length);
+                    hmac.DoFinal(F, 0);
+                    hmac.Reset();
+                    for (int j = 0; j < F.Length; j++)
+                        block[j] = (byte)(block[j] ^ F[j]);
+                }
+                for (int j = 0; j < block.Length; j++)
+                    output[(blockNum-1)*blockSize + j] = block[j];
+            }
+            Array.Resize(ref output, keyLength);
+            return output;
+        }
+
         private byte[] GetDecryptionKey(string pin)
         {
-            var digest = new Gost3411Digest();
             var passwordData = Encoding.ASCII.GetBytes(pin ?? "");
+            if (DefenceKeyInfo.Algorithm.Algorithm.Equals(PkcsObjectIdentifiers.IdPbkdf2))
+            {
+                // PBKDF2 используется в контейнерах ViPNet Jcrypto SDK
+                // Самое смешное, что сам десктопный ViPNet CSP не понимает такие контейнеры
+                // А мы понимаем!
+                var p = Pbkdf2Params.GetInstance(DefenceKeyInfo.Algorithm.Parameters);
+                return PBKDF2(
+                    MacUtilities.GetMac(p.Prf.Algorithm),
+                    passwordData,
+                    p.GetSalt(),
+                    p.IterationCount.IntValue,
+                    p.KeyLength.IntValue
+                );
+            }
+            var digest = new Gost3411Digest();
             var keyData = new byte[digest.GetDigestSize()];
             var unwrappingKey = new byte[digest.GetDigestSize()];
 
