@@ -48,12 +48,27 @@ namespace VipNetExtract
         public DerOctetString PublicKey { get; internal set; }
         public byte[] KeyBlock { get; }
 
-        public BigInteger GetPrivateKey(string pin)
+        public byte[] GetProtectionKey(string pin)
+        {
+            if (KeyInfo.KeyClass.Value.IntValue != 64 && KeyInfo.KeyType.Value.IntValue != 24622)
+                throw new CryptographicException("Вспомогательный контейнер не содержит ключа защиты");
+            var cek = KeyBlock.Take(KeyBlock.Length - 12).ToArray();
+            var mac = KeyBlock.Skip(cek.Length).Take(4).ToArray();
+            var data = cek.Concat(KeyInfo.RawData).ToArray();
+            var pinKey = GetDecryptionKey(pin, null);
+
+            CheckMac(pinKey, cek, data, mac);
+
+            var iv = KeyBlock.Skip(KeyBlock.Length - 8).ToArray();
+            return DecryptKey(pinKey, cek, iv);
+        }
+
+        public BigInteger GetPrivateKey(string pin, VipNetContainer defence)
         {
             var cek = KeyBlock.Take(KeyBlock.Length - 12).ToArray();
             var mac = KeyBlock.Skip(cek.Length).Take(4).ToArray();
             var data = cek.Concat(KeyInfo.RawData).ToArray();
-            var pinKey = GetDecryptionKey(pin);
+            var pinKey = GetDecryptionKey(pin, defence);
 
             CheckMac(pinKey, cek, data, mac);
 
@@ -127,10 +142,18 @@ namespace VipNetExtract
             return output;
         }
 
-        private byte[] GetDecryptionKey(string pin)
+        private byte[] GetDecryptionKey(string pin, VipNetContainer defence)
         {
             var passwordData = Encoding.ASCII.GetBytes(pin ?? "");
-            if (DefenceKeyInfo.Algorithm.Algorithm.Equals(PkcsObjectIdentifiers.IdPbkdf2))
+            if (DefenceKeyInfo.KeyClass.Value.IntValue == 64 && DefenceKeyInfo.KeyType.Value.IntValue == 24622)
+            {
+                // Контейнер зашифрован ключом, лежащим в ещё одном контейнере
+                if (defence == null)
+                    throw new CryptographicException("Закрытый ключ зашифрован секретным ключом, расположенным в отдельном вспомогательном контейнере. Используйте опцию --defence");
+                return defence.Entries[0].GetProtectionKey(pin);
+            }
+            if (DefenceKeyInfo.Algorithm != null &&
+                DefenceKeyInfo.Algorithm.Algorithm.Equals(PkcsObjectIdentifiers.IdPbkdf2))
             {
                 // PBKDF2 используется в контейнерах ViPNet Jcrypto SDK
                 // Самое смешное, что сам десктопный ViPNet CSP не понимает такие контейнеры

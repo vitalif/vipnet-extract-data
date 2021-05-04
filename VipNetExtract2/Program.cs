@@ -19,12 +19,13 @@ namespace VipNetExtract
 
         static void Main(string[] args)
         {
-            string file = null, pin = null;
+            string file = null, pin = null, defenceFile = null;
             Mode mode = Mode.Private;
             bool showHelp = false;
 
             options = new OptionSet {
                 { "f|file=",  "Путь к контейнеру", f => file = f },
+                { "d|defence=",  "Путь к вспомогательному контейнеру секретного ключа", f => defenceFile = f },
                 { "private", "Извлечь закрытый ключ (по умолчанию)", p => { if (p != null) mode = Mode.Private; } },
                 { "cert", "Извлечь сертификат", c => { if (c != null) mode = Mode.Certificate; } },
                 { "p|pin=", "ПИН-код", p => pin = p },
@@ -52,7 +53,8 @@ namespace VipNetExtract
 
             try {
                 var container = VipNetContainer.LoadFromFile(file);
-                export.Export(container, pin, Console.OpenStandardOutput());
+                var defence = defenceFile != null ? VipNetContainer.LoadFromFile(defenceFile) : null;
+                export.Export(container, defence, pin, Console.OpenStandardOutput());
             } catch (Exception e) {
                 Console.Error.WriteLine(e.Message);
             }

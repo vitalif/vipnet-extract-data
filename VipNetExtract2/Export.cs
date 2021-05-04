@@ -15,14 +15,14 @@ namespace VipNetExtract
 {
     interface IExport
     {
-        void Export(VipNetContainer container, string pin, Stream output);
+        void Export(VipNetContainer container, VipNetContainer defence, string pin, Stream output);
     }
 
     class PrivateKeyExport : IExport
     {
-        public void Export(VipNetContainer container, string pin, Stream output)
+        public void Export(VipNetContainer container, VipNetContainer defence, string pin, Stream output)
         {
-            var privateKey = EncodePrivateKey(container, pin);
+            var privateKey = EncodePrivateKey(container, defence, pin);
             var pemObject = new PemObject("PRIVATE KEY", privateKey.GetDerEncoded());
             using (var sw = new StreamWriter(output)) {
                 var writer = new PemWriter(sw);
@@ -30,7 +30,7 @@ namespace VipNetExtract
             }
         }
 
-        private static Asn1Object EncodePrivateKey(VipNetContainer container, string pin)
+        private static Asn1Object EncodePrivateKey(VipNetContainer container, VipNetContainer defence, string pin)
         {
             var entry = container.Entries[0];
             var gostParams = Gost3410PublicKeyAlgParameters.GetInstance(entry.KeyInfo.Algorithm.Parameters);
@@ -44,14 +44,14 @@ namespace VipNetExtract
                         gostParams.DigestParamSet
                     )
                 ),
-                new DerOctetString(new DerInteger(entry.GetPrivateKey(pin)))
+                new DerOctetString(new DerInteger(entry.GetPrivateKey(pin, defence)))
             );
         }
     }
 
     class CertificateExport : IExport
     {
-        public void Export(VipNetContainer container, string pin, Stream output)
+        public void Export(VipNetContainer container, VipNetContainer defence, string pin, Stream output)
         {
             var cert = container.Entries[0].Certificate;
             if (cert == null)
